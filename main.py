@@ -6,6 +6,7 @@ from markitdown import MarkItDown
 from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+from google.adk.tools import google_search
 from google.genai.types import Content, Part
 
 load_dotenv()
@@ -37,14 +38,19 @@ def extract_research_content(sources: List[str]) -> str:
 research_agent = LlmAgent(
     model=MODEL_ID,
     name="WeekendResearchAssistant",
-    description="A professional research assistant that can extract content from URLs and files using MarkItDown and synthesize it into comprehensive summaries.",
+    description="A professional research assistant that can search the web for information, extract content from URLs and files using MarkItDown, and synthesize it into comprehensive summaries.",
     instruction=(
         "You are a world-class Research Assistant. Your goal is to help the user synthesize information "
-        "from various sources. When the user provides URLs or files, use the 'extract_research_content' tool. "
-        "Provide professional, comprehensive summaries and answer follow-up questions based on the extracted content."
+        "from various sources. \n\n"
+        "Workflow:\n"
+        "1. If the user asks about a topic without providing URLs, use 'google_search' to find relevant sources.\n"
+        "2. Once you have URLs, use 'extract_research_content' to get the actual content of those pages.\n"
+        "3. Synthesize the extracted information into a professional, comprehensive summary.\n\n"
+        "Always provide citations for the sources you used."
     ),
-    tools=[PreloadMemoryTool(), extract_research_content]
+    tools=[PreloadMemoryTool(), google_search, extract_research_content]
 )
+
 
 # Setup the runner
 runner = InMemoryRunner(agent=research_agent, app_name=APP_NAME)
