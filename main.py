@@ -1,63 +1,96 @@
+import asyncio
 import os
-from typing import List, Union
+from typing import List
 from dotenv import load_dotenv
 from markitdown import MarkItDown
-from google import genai
+from google.adk.agents import LlmAgent
+from google.adk.runners import InMemoryRunner
+from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+from google.genai.types import Content, Part
 
 load_dotenv()
 
-def research_assistant(inputs: List[Union[str, bytes]]):
+# Constants
+MODEL_ID = "gemini-2.5-flash"
+APP_NAME = "weekend_research_assistant"
+USER_ID = "default_user"
+SESSION_ID = "research_session"
+
+# Tool for the agent to extract content from URLs or files
+def extract_research_content(sources: List[str]) -> str:
+    """
+    Extracts and converts content from a list of URLs or file paths to Markdown.
+    Use this tool whenever the user provides links or files to research.
+    """
     md = MarkItDown()
     combined_content = []
-
-    for item in inputs:
-        print(f"Processing: {item}")
+    for item in sources:
         try:
-            # MarkItDown handles URLs and local files
             result = md.convert(item)
             combined_content.append(f"--- Source: {item} ---\n{result.text_content}\n")
         except Exception as e:
-            print(f"Error processing {item}: {e}")
+            combined_content.append(f"Error processing {item}: {e}")
+    
+    return "\n\n".join(combined_content)
 
-    full_text = "\n\n".join(combined_content)
-    
-    if not full_text:
-        return "No content could be extracted from the provided sources."
+# Define the Research Agent
+research_agent = LlmAgent(
+    model=MODEL_ID,
+    name="WeekendResearchAssistant",
+    description="A professional research assistant that can extract content from URLs and files using MarkItDown and synthesize it into comprehensive summaries.",
+    instruction=(
+        "You are a world-class Research Assistant. Your goal is to help the user synthesize information "
+        "from various sources. When the user provides URLs or files, use the 'extract_research_content' tool. "
+        "Provide professional, comprehensive summaries and answer follow-up questions based on the extracted content."
+    ),
+    tools=[PreloadMemoryTool(), extract_research_content]
+)
 
-    # Initialize the modern genai client
-    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+# Setup the runner
+runner = InMemoryRunner(agent=research_agent, app_name=APP_NAME)
+
+async def converse():
+    # Create a session for the conversation
+    await runner.session_service.create_session(
+        app_name=APP_NAME,
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+    )
     
-    prompt = f"""
-    You are a world-class Research Assistant. Below is content extracted from various sources (webpages, YouTube transcripts, documents) in Markdown format.
-    Please synthesize this information into a professional, comprehensive research summary. 
+    print("\n--- 🤖 Weekend Research Assistant Agent ---")
+    print("I can research URLs and files for you. Type 'exit' to quit.")
     
-    Your summary should:
-    1. Provide a high-level executive summary.
-    2. Break down key themes and detailed findings.
-    3. Identify and contrast conflicting viewpoints or data.
-    4. Provide a final conclusion based on the evidence.
-    
-    Content:
-    {full_text}
-    """
-    
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        return f"Error generating synthesis: {e}"
+    while True:
+        try:
+            # Note: input() might block in some async environments, but for a local script it's fine.
+            user_input = input("\nYou: ")
+            if user_input.lower() in ["exit", "quit"]:
+                break
+            
+            content = Content(role="user", parts=[Part(text=user_input)])
+            
+            async for event in runner.run_async(
+                user_id=USER_ID,
+                session_id=SESSION_ID,
+                new_message=content,
+            ):
+                if event.content and event.content.parts and event.author != "user":
+                    for part in event.content.parts:
+                        if part.text:
+                            print(f"Assistant: {part.text}")
+            
+            # Save session to memory for context across turns
+            session = await runner.session_service.get_session(
+                app_name=APP_NAME,
+                user_id=USER_ID,
+                session_id=SESSION_ID,
+            )
+            await runner.memory_service.add_session_to_memory(session)
+            
+        except EOFError:
+            break
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    # Testing with a mix of a webpage and a YouTube video
-    test_sources = [
-        "https://en.wikipedia.org/wiki/Artificial_intelligence",
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    ]
-    
-    print("Starting Deep Research synthesis...")
-    summary = research_assistant(test_sources)
-    print("\n--- Final Research Summary ---\n")
-    print(summary)
+    asyncio.run(converse())
